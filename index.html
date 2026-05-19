@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Clipboard Canvas</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#f4f1e8;
+    --ink:#1c1b18;
+    --line:#cdc7b4;
+    --accent:#16513f;
+    --accent-2:#b4451f;
+    --card:#fffdf6;
+    --shadow:rgba(28,27,24,.14);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    background:var(--paper);
+    color:var(--ink);
+    font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;
+    font-size:14px;
+    line-height:1.55;
+    background-image:
+      linear-gradient(rgba(0,0,0,.025) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(0,0,0,.025) 1px,transparent 1px);
+    background-size:26px 26px;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:var(--accent)}
+  .wrap{max-width:1040px;margin:0 auto;padding:26px 20px 90px;min-height:100%}
+
+  header{
+    display:flex;align-items:flex-end;justify-content:space-between;
+    gap:16px;flex-wrap:wrap;border-bottom:2px solid var(--ink);
+    padding-bottom:14px;margin-bottom:22px;
+  }
+  .brand h1{
+    font-family:'Instrument Serif',serif;font-weight:400;
+    font-size:42px;line-height:1;letter-spacing:.3px;
+  }
+  .brand h1 em{color:var(--accent-2)}
+  .brand p{font-size:12px;color:#6c6757;margin-top:6px;letter-spacing:.4px}
+
+  .status{
+    display:flex;align-items:center;gap:9px;font-size:12px;
+    border:1.5px solid var(--ink);padding:7px 12px;background:var(--card);
+    box-shadow:3px 3px 0 var(--shadow);white-space:nowrap;
+  }
+  .dot{width:9px;height:9px;border-radius:50%;background:#9a9484;flex:none}
+  .dot.ok{background:#1f9d55;box-shadow:0 0 0 3px rgba(31,157,85,.18)}
+  .dot.sync{background:#d9a400;animation:pulse 1s infinite}
+  .dot.off{background:#c0392b}
+  @keyframes pulse{50%{opacity:.35}}
+
+  .composer{
+    background:var(--card);border:1.5px solid var(--ink);
+    box-shadow:5px 5px 0 var(--shadow);margin-bottom:26px;
+  }
+  .composer textarea{
+    width:100%;min-height:120px;resize:vertical;border:0;outline:0;
+    background:transparent;font-family:inherit;font-size:14px;
+    color:var(--ink);padding:16px 18px;line-height:1.6;
+  }
+  .composer textarea::placeholder{color:#9a9484}
+  .composer .bar{
+    display:flex;align-items:center;justify-content:space-between;
+    gap:12px;border-top:1.5px dashed var(--line);padding:10px 14px;
+    flex-wrap:wrap;
+  }
+  .hint{font-size:11px;color:#8a8474}
+  .btn{
+    font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;
+    border:1.5px solid var(--ink);background:var(--ink);color:var(--paper);
+    padding:9px 18px;letter-spacing:.4px;transition:transform .06s,box-shadow .06s;
+    box-shadow:3px 3px 0 var(--shadow);
+  }
+  .btn:hover{transform:translate(-1px,-1px);box-shadow:4px 4px 0 var(--shadow)}
+  .btn:active{transform:translate(2px,2px);box-shadow:none}
+  .btn.ghost{background:var(--card);color:var(--ink)}
+  .btn.sm{padding:6px 12px;font-size:11px;box-shadow:2px 2px 0 var(--shadow)}
+  .btn:disabled{opacity:.45;cursor:not-allowed;transform:none;box-shadow:2px 2px 0 var(--shadow)}
+
+  .meta-row{
+    display:flex;align-items:center;justify-content:space-between;
+    gap:12px;margin-bottom:14px;flex-wrap:wrap;
+  }
+  .meta-row .count{font-size:12px;color:#6c6757;letter-spacing:.5px;text-transform:uppercase}
+  .meta-row .tools{display:flex;gap:8px;flex-wrap:wrap}
+
+  .grid{display:flex;flex-direction:column;gap:14px}
+  .card{
+    background:var(--card);border:1.5px solid var(--ink);
+    box-shadow:4px 4px 0 var(--shadow);padding:0;overflow:hidden;
+    animation:rise .25s ease both;
+  }
+  @keyframes rise{from{opacity:0;transform:translateY(8px)}}
+  .card .head{
+    display:flex;align-items:center;justify-content:space-between;
+    gap:10px;padding:8px 12px;border-bottom:1.5px dashed var(--line);
+    font-size:11px;color:#8a8474;
+  }
+  .card .head .who{display:flex;align-items:center;gap:8px}
+  .tag{background:var(--accent);color:#fff;padding:1px 7px;font-size:10px;letter-spacing:.5px}
+  .card .body{padding:14px 16px;white-space:pre-wrap;word-break:break-word;font-size:13.5px}
+  .card .body img{max-width:100%;height:auto;border:1px solid var(--line);display:block;margin:6px 0}
+  .card .acts{display:flex;gap:6px}
+  .iconbtn{
+    font-family:inherit;font-size:11px;font-weight:700;cursor:pointer;
+    border:1.5px solid var(--ink);background:transparent;color:var(--ink);
+    padding:4px 10px;
+  }
+  .iconbtn:hover{background:var(--ink);color:var(--paper)}
+  .iconbtn.danger:hover{background:var(--accent-2);border-color:var(--accent-2)}
+
+  .empty{
+    text-align:center;padding:60px 20px;color:#8a8474;
+    border:1.5px dashed var(--line);background:rgba(255,255,255,.4);
+  }
+  .empty b{font-family:'Instrument Serif',serif;font-size:22px;color:var(--ink);font-style:italic}
+
+  /* Setup / modal */
+  .overlay{
+    position:fixed;inset:0;background:rgba(28,27,24,.55);
+    display:flex;align-items:center;justify-content:center;padding:20px;z-index:50;
+    backdrop-filter:blur(2px);
+  }
+  .panel{
+    background:var(--paper);border:2px solid var(--ink);max-width:520px;width:100%;
+    box-shadow:8px 8px 0 var(--shadow);
+  }
+  .panel .ph{padding:18px 22px;border-bottom:2px solid var(--ink)}
+  .panel .ph h2{font-family:'Instrument Serif',serif;font-weight:400;font-size:28px}
+  .panel .ph p{font-size:12px;color:#6c6757;margin-top:4px}
+  .panel .pb{padding:20px 22px;display:flex;flex-direction:column;gap:16px}
+  .panel label{font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#6c6757;display:block;margin-bottom:6px}
+  .panel input{
+    width:100%;font-family:inherit;font-size:13px;padding:10px 12px;
+    border:1.5px solid var(--ink);background:var(--card);color:var(--ink);outline:0;
+  }
+  .panel .or{display:flex;align-items:center;gap:12px;color:#8a8474;font-size:11px;letter-spacing:1px}
+  .panel .or::before,.panel .or::after{content:"";flex:1;height:1.5px;background:var(--line)}
+  .note{font-size:11px;color:#8a8474;line-height:1.6}
+  .note b{color:var(--accent-2)}
+  .row{display:flex;gap:10px;flex-wrap:wrap}
+  .row .btn{flex:1;min-width:140px;text-align:center}
+  .err{color:#c0392b;font-size:12px;min-height:16px}
+
+  footer{
+    margin-top:34px;padding-top:14px;border-top:1.5px dashed var(--line);
+    font-size:11px;color:#8a8474;line-height:1.7;
+  }
+  footer code{background:#e8e3d2;padding:1px 5px}
+  @media(max-width:560px){
+    .brand h1{font-size:32px}
+    .wrap{padding:18px 14px 80px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <h1>Clipboard&nbsp;<em>Canvas</em></h1>
+      <p id="spaceLabel">a shared scratch space for your machines</p>
+    </div>
+    <div class="status" title="Sync status">
+      <span class="dot" id="dot"></span>
+      <span id="statusText">starting…</span>
+    </div>
+  </header>
+
+  <div class="composer">
+    <textarea id="input" placeholder="Paste or type anything here — text, links, snippets, a quick note. Then hit Post (or Ctrl/Cmd+Enter). It shows up on your other laptop within a couple seconds."></textarea>
+    <div class="bar">
+      <span class="hint">Tip: ⌘/Ctrl + Enter to post · paste images are supported (kept small)</span>
+      <button class="btn" id="postBtn">Post to canvas ↵</button>
+    </div>
+  </div>
+
+  <div class="meta-row">
+    <span class="count" id="count">0 items</span>
+    <div class="tools">
+      <button class="btn ghost sm" id="shareBtn">Copy share link</button>
+      <button class="btn ghost sm" id="settingsBtn">Space settings</button>
+      <button class="btn ghost sm" id="clearBtn">Clear all</button>
+    </div>
+  </div>
+
+  <div class="grid" id="grid"></div>
+
+  <footer>
+    Static page on GitHub Pages + a free <a href="https://kvdb.io" target="_blank" rel="noopener">kvdb.io</a> bucket for the shared data.
+    Anyone who has this exact link can read &amp; post here — treat it as <b>public</b>; don't paste passwords or anything sensitive.
+    Free service, so it can rate-limit or reset; for anything durable, export what matters.
+  </footer>
+</div>
+
+<!-- Setup overlay -->
+<div class="overlay" id="overlay" style="display:none">
+  <div class="panel">
+    <div class="ph">
+      <h2 id="panelTitle">Create a shared space</h2>
+      <p>One space is shared by all the machines that open its link.</p>
+    </div>
+    <div class="pb">
+      <div>
+        <button class="btn" id="createBtn" style="width:100%">✦ Create a new space for me</button>
+        <p class="note" style="margin-top:8px">Generates a private bucket on kvdb.io and a random room name. Nothing to sign up for.</p>
+      </div>
+      <div class="or">or join an existing one</div>
+      <div>
+        <label for="bucketIn">Bucket ID</label>
+        <input id="bucketIn" placeholder="e.g. 4Qn8c…" autocomplete="off" spellcheck="false">
+      </div>
+      <div>
+        <label for="roomIn">Room name</label>
+        <input id="roomIn" placeholder="e.g. desk-notes" autocomplete="off" spellcheck="false">
+      </div>
+      <button class="btn ghost" id="joinBtn">Join this space</button>
+      <div class="err" id="setupErr"></div>
+      <p class="note">
+        Easiest path: click <b>Create</b> on laptop&nbsp;A, then use <b>Copy share link</b> and open
+        that URL on laptop&nbsp;B — it connects automatically. The link looks like
+        <code>…/#k=BUCKET&amp;r=ROOM</code>, so bookmark it on both machines.
+      </p>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  const KV = "https://kvdb.io";
+  const POLL_MS = 2600;
+  const MAX_PAYLOAD = 380000;            // stay well under kvdb value limits
+  const LS_CFG = "cc_cfg_v1";
+  const LS_CACHE = "cc_cache_v1";
+  const CLIENT = "m-" + Math.random().toString(36).slice(2,7);
+
+  const $ = id => document.getElementById(id);
+  const dot=$("dot"), statusText=$("statusText"), grid=$("grid"),
+        input=$("input"), countEl=$("count"), overlay=$("overlay");
+
+  let cfg = loadCfg();
+  let board = { items: [], tomb: {} };   // items: [{id,text,html,ts,by}], tomb: {id:ts}
+  let dirty = false, polling = false, lastNet = 0;
+
+  /* ---------- config ---------- */
+  function loadCfg(){
+    const h = new URLSearchParams(location.hash.slice(1));
+    if(h.get("k") && h.get("r")){
+      const c = { bucket:h.get("k").trim(), room:h.get("r").trim() };
+      localStorage.setItem(LS_CFG, JSON.stringify(c));
+      history.replaceState(null,"",location.pathname+location.search+"#k="+c.bucket+"&r="+c.room);
+      return c;
+    }
+    try{ return JSON.parse(localStorage.getItem(LS_CFG)||"null"); }catch(e){ return null; }
+  }
+  function saveCfg(c){
+    cfg=c; localStorage.setItem(LS_CFG, JSON.stringify(c));
+    history.replaceState(null,"",location.pathname+location.search+"#k="+c.bucket+"&r="+c.room);
+    $("spaceLabel").textContent = "space · "+c.room+" · "+c.bucket.slice(0,6)+"…";
+  }
+  const key = () => "board_" + encodeURIComponent(cfg.room);
+
+  /* ---------- status ---------- */
+  function setStatus(state,msg){
+    dot.className = "dot " + state;
+    statusText.textContent = msg;
+  }
+
+  /* ---------- remote ---------- */
+  async function createBucket(){
+    const res = await fetch(KV + "/", { method:"POST" });
+    if(!res.ok) throw new Error("Could not create a bucket ("+res.status+")");
+    const id = (await res.text()).trim();
+    if(!id) throw new Error("Empty bucket id from kvdb");
+    return id;
+  }
+  async function pull(){
+    const res = await fetch(KV+"/"+cfg.bucket+"/"+key(), {cache:"no-store"});
+    if(res.status===404) return {items:[],tomb:{}};
+    if(!res.ok) throw new Error("read "+res.status);
+    const txt = await res.text();
+    if(!txt) return {items:[],tomb:{}};
+    try{ const d=JSON.parse(txt); return {items:d.items||[],tomb:d.tomb||{}}; }
+    catch(e){ return {items:[],tomb:{}}; }
+  }
+  async function push(data){
+    const body = JSON.stringify(data);
+    if(body.length > MAX_PAYLOAD) throw new Error("TOO_BIG");
+    const res = await fetch(KV+"/"+cfg.bucket+"/"+key(), {method:"PUT", body});
+    if(!res.ok) throw new Error("write "+res.status);
+  }
+
+  /* ---------- merge ---------- */
+  function merge(a,b){
+    const tomb = Object.assign({}, a.tomb, b.tomb);
+    for(const k in b.tomb){ if(!(k in tomb) || b.tomb[k]>tomb[k]) tomb[k]=b.tomb[k]; }
+    const map = new Map();
+    for(const it of [...a.items, ...b.items]){
+      if(tomb[it.id]) continue;
+      const ex = map.get(it.id);
+      if(!ex || it.ts >= ex.ts) map.set(it.id, it);
+    }
+    const cutoff = Date.now() - 7*864e5;
+    for(const k in tomb){ if(tomb[k] < cutoff) delete tomb[k]; }
+    const items = [...map.values()].sort((x,y)=>y.ts-x.ts).slice(0,200);
+    return { items, tomb };
+  }
+
+  /* ---------- sync loop ---------- */
+  async function sync(){
+    if(!cfg || polling) return;
+    polling = true;
+    setStatus("sync","syncing…");
+    try{
+      const remote = await pull();
+      const before = JSON.stringify(board.items.map(i=>i.id));
+      board = merge(board, remote);
+      const after = JSON.stringify(board.items.map(i=>i.id));
+      if(dirty){
+        await push(board);
+        dirty = false;
+      }
+      cacheLocal();
+      if(before!==after || dirty) render();
+      lastNet = Date.now();
+      setStatus("ok","synced · "+timeShort(lastNet));
+    }catch(e){
+      if(e.message==="TOO_BIG"){
+        setStatus("off","canvas is full — clear some items");
+      }else{
+        setStatus("off","offline · retrying (working locally)");
+      }
+    }finally{
+      polling = false;
+    }
+  }
+
+  /* ---------- local cache (offline fallback) ---------- */
+  function cacheLocal(){
+    try{ localStorage.setItem(LS_CACHE+":"+(cfg?cfg.room:"_"), JSON.stringify(board)); }catch(e){}
+  }
+  function restoreLocal(){
+    try{
+      const d=JSON.parse(localStorage.getItem(LS_CACHE+":"+(cfg?cfg.room:"_"))||"null");
+      if(d) board = {items:d.items||[], tomb:d.tomb||{}};
+    }catch(e){}
+  }
+
+  /* ---------- actions ---------- */
+  function addItem(text, html){
+    const it = { id: Date.now().toString(36)+Math.random().toString(36).slice(2,6),
+                 text: text||"", html: html||"", ts: Date.now(), by: CLIENT };
+    board.items.unshift(it);
+    board = merge(board, {items:[],tomb:{}});
+    dirty = true; cacheLocal(); render(); sync();
+  }
+  function removeItem(id){
+    board.tomb[id] = Date.now();
+    board.items = board.items.filter(i=>i.id!==id);
+    dirty = true; cacheLocal(); render(); sync();
+  }
+  function clearAll(){
+    const now=Date.now();
+    for(const it of board.items) board.tomb[it.id]=now;
+    board.items=[];
+    dirty=true; cacheLocal(); render(); sync();
+  }
+
+  /* ---------- render ---------- */
+  function esc(s){ return s.replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+  function timeShort(ts){
+    const d=new Date(ts), n=new Date();
+    const sameDay=d.toDateString()===n.toDateString();
+    return (sameDay?"":d.toLocaleDateString([],{month:"short",day:"numeric"})+" ")
+           + d.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
+  }
+  function render(){
+    countEl.textContent = board.items.length + (board.items.length===1?" item":" items");
+    if(!board.items.length){
+      grid.innerHTML = '<div class="empty"><b>Nothing here yet.</b><br><br>'+
+        'Paste something above and it lands on every machine that opens this link.</div>';
+      return;
+    }
+    grid.innerHTML = "";
+    for(const it of board.items){
+      const card = document.createElement("div");
+      card.className = "card";
+      const mine = it.by===CLIENT;
+      const bodyHtml = it.html ? it.html : esc(it.text).replace(/\n/g,"<br>");
+      card.innerHTML =
+        '<div class="head"><span class="who">'+
+          (mine?'<span class="tag">you</span>':'<span class="tag" style="background:#7a746040">remote</span>')+
+          '<span>'+timeShort(it.ts)+'</span></span>'+
+          '<span class="acts">'+
+            '<button class="iconbtn" data-copy="'+it.id+'">copy</button>'+
+            '<button class="iconbtn danger" data-del="'+it.id+'">delete</button>'+
+          '</span></div>'+
+        '<div class="body">'+bodyHtml+'</div>';
+      grid.appendChild(card);
+    }
+  }
+
+  grid.addEventListener("click", async e=>{
+    const c=e.target.getAttribute("data-copy"), d=e.target.getAttribute("data-del");
+    if(c){
+      const it=board.items.find(i=>i.id===c); if(!it) return;
+      try{ await navigator.clipboard.writeText(it.text||it.html.replace(/<[^>]+>/g,"")); 
+           e.target.textContent="copied!"; setTimeout(()=>e.target.textContent="copy",1200); }
+      catch(err){ e.target.textContent="select+copy"; }
+    }
+    if(d) removeItem(d);
+  });
+
+  /* ---------- input ---------- */
+  function postFromInput(){
+    const v=input.value.trim();
+    if(!v) return;
+    addItem(v,"");
+    input.value="";
+    input.focus();
+  }
+  $("postBtn").addEventListener("click", postFromInput);
+  input.addEventListener("keydown", e=>{
+    if((e.metaKey||e.ctrlKey) && e.key==="Enter"){ e.preventDefault(); postFromInput(); }
+  });
+  input.addEventListener("paste", e=>{
+    const items=e.clipboardData && e.clipboardData.items;
+    if(!items) return;
+    for(const i of items){
+      if(i.type && i.type.indexOf("image")===0){
+        const file=i.getAsFile(); if(!file) continue;
+        const r=new FileReader();
+        r.onload=()=>{
+          if((r.result||"").length>MAX_PAYLOAD*0.7){
+            alert("That image is too large for the shared canvas. Try a smaller one or paste a link instead.");
+            return;
+          }
+          addItem("[image]", '<img alt="pasted image" src="'+r.result+'">');
+        };
+        r.readAsDataURL(file);
+        e.preventDefault();
+        return;
+      }
+    }
+  });
+
+  /* ---------- toolbar ---------- */
+  $("shareBtn").addEventListener("click", async ()=>{
+    if(!cfg){ openSetup(); return; }
+    const url=location.origin+location.pathname+location.search+"#k="+cfg.bucket+"&r="+cfg.room;
+    try{ await navigator.clipboard.writeText(url);
+         $("shareBtn").textContent="link copied!"; setTimeout(()=>$("shareBtn").textContent="Copy share link",1400); }
+    catch(e){ prompt("Open this URL on your other laptop:", url); }
+  });
+  $("clearBtn").addEventListener("click", ()=>{ if(confirm("Remove every item for everyone?")) clearAll(); });
+  $("settingsBtn").addEventListener("click", openSetup);
+
+  /* ---------- setup ---------- */
+  function openSetup(){
+    if(cfg){ $("bucketIn").value=cfg.bucket; $("roomIn").value=cfg.room;
+             $("panelTitle").textContent="Space settings"; }
+    overlay.style.display="flex";
+  }
+  function closeSetup(){ overlay.style.display="none"; }
+  overlay.addEventListener("click", e=>{ if(e.target===overlay && cfg) closeSetup(); });
+
+  $("createBtn").addEventListener("click", async ()=>{
+    const b=$("createBtn"); const err=$("setupErr");
+    b.disabled=true; b.textContent="creating…"; err.textContent="";
+    try{
+      const bucket=await createBucket();
+      const room="space-"+Math.random().toString(36).slice(2,8);
+      saveCfg({bucket,room});
+      closeSetup(); boot();
+    }catch(e){
+      err.textContent="Couldn't auto-create (network/CORS). Create one manually: run  curl -X POST https://kvdb.io/  then paste the ID below.";
+    }finally{
+      b.disabled=false; b.textContent="✦ Create a new space for me";
+    }
+  });
+  $("joinBtn").addEventListener("click", ()=>{
+    const bucket=$("bucketIn").value.trim(), room=$("roomIn").value.trim();
+    const err=$("setupErr");
+    if(!bucket || !room){ err.textContent="Both a bucket ID and a room name are required."; return; }
+    saveCfg({bucket,room}); closeSetup(); boot();
+  });
+
+  /* ---------- boot ---------- */
+  function boot(){
+    if(!cfg){ openSetup(); render(); setStatus("off","no space yet — set one up"); return; }
+    $("spaceLabel").textContent = "space · "+cfg.room+" · "+cfg.bucket.slice(0,6)+"…";
+    restoreLocal(); render();
+    sync();
+    if(window._cc_timer) clearInterval(window._cc_timer);
+    window._cc_timer=setInterval(sync, POLL_MS);
+  }
+  window.addEventListener("focus", sync);
+  window.addEventListener("hashchange", ()=>{ cfg=loadCfg(); boot(); });
+
+  boot();
+})();
+</script>
+</body>
+</html>
