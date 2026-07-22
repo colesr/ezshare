@@ -145,9 +145,6 @@
   .panel .or{display:flex;align-items:center;gap:12px;color:#8a8474;font-size:11px;letter-spacing:1px}
   .panel .or::before,.panel .or::after{content:"";flex:1;height:1.5px;background:var(--line)}
   .note{font-size:11px;color:#8a8474;line-height:1.6}
-  .note b{color:var(--accent-2)}
-  .row{display:flex;gap:10px;flex-wrap:wrap}
-  .row .btn{flex:1;min-width:140px;text-align:center}
   .err{color:#c0392b;font-size:12px;min-height:16px}
 
   footer{
@@ -194,9 +191,8 @@
   <div class="grid" id="grid"></div>
 
   <footer>
-    Static page on GitHub Pages + a free <a href="https://kvdb.io" target="_blank" rel="noopener">kvdb.io</a> bucket for the shared data.
-    Anyone who has this exact link can read &amp; post here — treat it as <b>public</b>; don't paste passwords or anything sensitive.
-    Free service, so it can rate-limit or reset; for anything durable, export what matters.
+    Shared scratch space via <a href="https://kvdb.io" target="_blank" rel="noopener">kvdb.io</a> buckets.
+    Anyone with this link can read &amp; post here — treat as <b>public</b>.
   </footer>
 </div>
 
@@ -204,30 +200,21 @@
 <div class="overlay" id="overlay" style="display:none">
   <div class="panel">
     <div class="ph">
-      <h2 id="panelTitle">Create a shared space</h2>
-      <p>One space is shared by all the machines that open its link.</p>
+      <h2 id="panelTitle">Create or Join a Space</h2>
+      <p>One space is shared by all devices that open its unique link.</p>
     </div>
     <div class="pb">
       <div>
-        <button class="btn" id="createBtn" style="width:100%">✦ Create a new space for me</button>
-        <p class="note" style="margin-top:8px">Generates a private bucket on kvdb.io and a random room name. Nothing to sign up for.</p>
+        <button class="btn" id="createBtn" style="width:100%">✦ Create New Space</button>
+        <p class="note" style="margin-top:8px">Instantly generates a unique shared space ID. No terminal or setup needed.</p>
       </div>
-      <div class="or">or join an existing one</div>
+      <div class="or">or join an existing space</div>
       <div>
-        <label for="bucketIn">Bucket ID</label>
-        <input id="bucketIn" placeholder="e.g. 4Qn8c…" autocomplete="off" spellcheck="false">
+        <label for="spaceKeyIn">Space Key or URL</label>
+        <input id="spaceKeyIn" placeholder="Paste Space Key or full URL here…" autocomplete="off" spellcheck="false">
       </div>
-      <div>
-        <label for="roomIn">Room name</label>
-        <input id="roomIn" placeholder="e.g. desk-notes" autocomplete="off" spellcheck="false">
-      </div>
-      <button class="btn ghost" id="joinBtn">Join this space</button>
+      <button class="btn ghost" id="joinBtn">Join Space</button>
       <div class="err" id="setupErr"></div>
-      <p class="note">
-        Easiest path: click <b>Create</b> on laptop&nbsp;A, then use <b>Copy share link</b> and open
-        that URL on laptop&nbsp;B — it connects automatically. The link looks like
-        <code>…/#k=BUCKET&amp;r=ROOM</code>, so bookmark it on both machines.
-      </p>
     </div>
   </div>
 </div>
@@ -237,7 +224,7 @@
   "use strict";
   const KV = "https://kvdb.io";
   const POLL_MS = 2600;
-  const MAX_PAYLOAD = 380000;            // stay well under kvdb value limits
+  const MAX_PAYLOAD = 380000;
   const LS_CFG = "cc_cfg_v1";
   const LS_CACHE = "cc_cache_v1";
   const CLIENT = "m-" + Math.random().toString(36).slice(2,7);
@@ -247,26 +234,30 @@
         input=$("input"), countEl=$("count"), overlay=$("overlay");
 
   let cfg = loadCfg();
-  let board = { items: [], tomb: {} };   // items: [{id,text,html,ts,by}], tomb: {id:ts}
+  let board = { items: [], tomb: {} };
   let dirty = false, polling = false, lastNet = 0;
+
+  function generateSpaceKey(){
+    return 'sp-' + Math.random().toString(36).substring(2, 10) + Math.random().toString(36).substring(2, 10);
+  }
 
   /* ---------- config ---------- */
   function loadCfg(){
     const h = new URLSearchParams(location.hash.slice(1));
-    if(h.get("k") && h.get("r")){
-      const c = { bucket:h.get("k").trim(), room:h.get("r").trim() };
+    if(h.get("s")){
+      const c = { space: h.get("s").trim() };
       localStorage.setItem(LS_CFG, JSON.stringify(c));
-      history.replaceState(null,"",location.pathname+location.search+"#k="+c.bucket+"&r="+c.room);
+      history.replaceState(null,"",location.pathname+location.search+"#s="+c.space);
       return c;
     }
     try{ return JSON.parse(localStorage.getItem(LS_CFG)||"null"); }catch(e){ return null; }
   }
   function saveCfg(c){
     cfg=c; localStorage.setItem(LS_CFG, JSON.stringify(c));
-    history.replaceState(null,"",location.pathname+location.search+"#k="+c.bucket+"&r="+c.room);
-    $("spaceLabel").textContent = "space · "+c.room+" · "+c.bucket.slice(0,6)+"…";
+    history.replaceState(null,"",location.pathname+location.search+"#s="+c.space);
+    $("spaceLabel").textContent = "space · "+c.space;
   }
-  const key = () => "board_" + encodeURIComponent(cfg.room);
+  const key = () => "board_" + encodeURIComponent(cfg.space);
 
   /* ---------- status ---------- */
   function setStatus(state,msg){
@@ -275,15 +266,8 @@
   }
 
   /* ---------- remote ---------- */
-  async function createBucket(){
-    const res = await fetch(KV + "/", { method:"POST" });
-    if(!res.ok) throw new Error("Could not create a bucket ("+res.status+")");
-    const id = (await res.text()).trim();
-    if(!id) throw new Error("Empty bucket id from kvdb");
-    return id;
-  }
   async function pull(){
-    const res = await fetch(KV+"/"+cfg.bucket+"/"+key(), {cache:"no-store"});
+    const res = await fetch(KV+"/public_space/"+key(), {cache:"no-store"});
     if(res.status===404) return {items:[],tomb:{}};
     if(!res.ok) throw new Error("read "+res.status);
     const txt = await res.text();
@@ -294,7 +278,7 @@
   async function push(data){
     const body = JSON.stringify(data);
     if(body.length > MAX_PAYLOAD) throw new Error("TOO_BIG");
-    const res = await fetch(KV+"/"+cfg.bucket+"/"+key(), {method:"PUT", body});
+    const res = await fetch(KV+"/public_space/"+key(), {method:"PUT", body});
     if(!res.ok) throw new Error("write "+res.status);
   }
 
@@ -343,13 +327,13 @@
     }
   }
 
-  /* ---------- local cache (offline fallback) ---------- */
+  /* ---------- local cache ---------- */
   function cacheLocal(){
-    try{ localStorage.setItem(LS_CACHE+":"+(cfg?cfg.room:"_"), JSON.stringify(board)); }catch(e){}
+    try{ localStorage.setItem(LS_CACHE+":"+(cfg?cfg.space:"_"), JSON.stringify(board)); }catch(e){}
   }
   function restoreLocal(){
     try{
-      const d=JSON.parse(localStorage.getItem(LS_CACHE+":"+(cfg?cfg.room:"_"))||"null");
+      const d=JSON.parse(localStorage.getItem(LS_CACHE+":"+(cfg?cfg.space:"_"))||"null");
       if(d) board = {items:d.items||[], tomb:d.tomb||{}};
     }catch(e){}
   }
@@ -440,7 +424,7 @@
         const r=new FileReader();
         r.onload=()=>{
           if((r.result||"").length>MAX_PAYLOAD*0.7){
-            alert("That image is too large for the shared canvas. Try a smaller one or paste a link instead.");
+            alert("That image is too large for the shared canvas.");
             return;
           }
           addItem("[image]", '<img alt="pasted image" src="'+r.result+'">');
@@ -455,48 +439,45 @@
   /* ---------- toolbar ---------- */
   $("shareBtn").addEventListener("click", async ()=>{
     if(!cfg){ openSetup(); return; }
-    const url=location.origin+location.pathname+location.search+"#k="+cfg.bucket+"&r="+cfg.room;
+    const url=location.origin+location.pathname+location.search+"#s="+cfg.space;
     try{ await navigator.clipboard.writeText(url);
          $("shareBtn").textContent="link copied!"; setTimeout(()=>$("shareBtn").textContent="Copy share link",1400); }
-    catch(e){ prompt("Open this URL on your other laptop:", url); }
+    catch(e){ prompt("Open this URL on your other device:", url); }
   });
   $("clearBtn").addEventListener("click", ()=>{ if(confirm("Remove every item for everyone?")) clearAll(); });
   $("settingsBtn").addEventListener("click", openSetup);
 
   /* ---------- setup ---------- */
   function openSetup(){
-    if(cfg){ $("bucketIn").value=cfg.bucket; $("roomIn").value=cfg.room;
-             $("panelTitle").textContent="Space settings"; }
+    if(cfg){ $("spaceKeyIn").value=cfg.space; $("panelTitle").textContent="Space Settings"; }
     overlay.style.display="flex";
   }
   function closeSetup(){ overlay.style.display="none"; }
   overlay.addEventListener("click", e=>{ if(e.target===overlay && cfg) closeSetup(); });
 
-  $("createBtn").addEventListener("click", async ()=>{
-    const b=$("createBtn"); const err=$("setupErr");
-    b.disabled=true; b.textContent="creating…"; err.textContent="";
-    try{
-      const bucket=await createBucket();
-      const room="space-"+Math.random().toString(36).slice(2,8);
-      saveCfg({bucket,room});
-      closeSetup(); boot();
-    }catch(e){
-      err.textContent="Couldn't auto-create (network/CORS). Create one manually: run  curl -X POST https://kvdb.io/  then paste the ID below.";
-    }finally{
-      b.disabled=false; b.textContent="✦ Create a new space for me";
-    }
+  $("createBtn").addEventListener("click", ()=>{
+    const space = generateSpaceKey();
+    saveCfg({ space });
+    closeSetup();
+    boot();
   });
+
   $("joinBtn").addEventListener("click", ()=>{
-    const bucket=$("bucketIn").value.trim(), room=$("roomIn").value.trim();
-    const err=$("setupErr");
-    if(!bucket || !room){ err.textContent="Both a bucket ID and a room name are required."; return; }
-    saveCfg({bucket,room}); closeSetup(); boot();
+    let raw = $("spaceKeyIn").value.trim();
+    const err = $("setupErr");
+    if(!raw){ err.textContent = "Please enter a space key or URL."; return; }
+    if(raw.includes("#s=")){
+      raw = raw.split("#s=")[1].split("&")[0];
+    }
+    saveCfg({ space: raw });
+    closeSetup();
+    boot();
   });
 
   /* ---------- boot ---------- */
   function boot(){
-    if(!cfg){ openSetup(); render(); setStatus("off","no space yet — set one up"); return; }
-    $("spaceLabel").textContent = "space · "+cfg.room+" · "+cfg.bucket.slice(0,6)+"…";
+    if(!cfg){ openSetup(); render(); setStatus("off","no space active"); return; }
+    $("spaceLabel").textContent = "space · "+cfg.space;
     restoreLocal(); render();
     sync();
     if(window._cc_timer) clearInterval(window._cc_timer);
