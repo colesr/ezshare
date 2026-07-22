@@ -208,9 +208,9 @@
     </div>
     <div class="pb">
       <div>
-        <label for="emailIn">Email (optional)</label>
-        <input id="emailIn" type="email" placeholder="you@example.com — lets you manage/delete this space later" autocomplete="off">
-        <p class="note" style="margin-top:6px">kvdb.io (the storage host) requires an email on new buckets for recovery purposes. Leave blank and we'll use a throwaway one — you just won't be able to reclaim the bucket later.</p>
+        <label for="emailIn">Email (required by the storage host)</label>
+        <input id="emailIn" type="email" placeholder="you@example.com" autocomplete="off" required>
+        <p class="note" style="margin-top:6px">kvdb.io (the storage host) requires a real email on new buckets. This app previously fell back to a fake placeholder address when left blank — spaces created that way have been seen getting their writes silently rejected (403 "bucket policy blocked the request"), so a real address is now required.</p>
       </div>
       <div>
         <button class="btn" id="createBtn" style="width:100%">✦ Create New Space</button>
@@ -255,19 +255,28 @@
   let board = { items: [], tomb: {} };
   let dirty = false, polling = false, lastNet = 0;
 
-  function randomPlaceholderEmail(){
-    const rnd = Math.random().toString(36).slice(2,10);
-    return "space-" + rnd + "@kvdb-canvas.app";
-  }
-
   async function createBucket(email){
     // BUG (fixed): kvdb.io requires an `email` field on bucket creation —
     // "When creating a bucket, ensure that you set a valid email address"
     // (https://kvdb.io/docs/api/, Buckets > Create a Bucket). The original
     // code POSTed with no body at all, so every create attempt got a 400
     // and landed in the generic "network issue" error message.
+    //
+    // NOTE: an earlier version of this fix fell back to an auto-generated,
+    // undeliverable placeholder email when this field was left blank. That
+    // has since been observed producing buckets whose writes get rejected
+    // with 403 "bucket policy blocked the request" — plausibly an
+    // anti-abuse measure on kvdb.io's side, though this isn't documented
+    // and wasn't reproducible from this environment (kvdb.io isn't
+    // reachable in the sandbox this app is authored in). Since it's the
+    // leading suspect, a real email is now required rather than papered
+    // over with a placeholder.
+    const trimmed = (email || "").trim();
+    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)){
+      throw new Error("A real email address is required by kvdb.io to create a space.");
+    }
     const params = new URLSearchParams();
-    params.set("email", (email && email.trim()) || randomPlaceholderEmail());
+    params.set("email", trimmed);
     const res = await fetch(KV + "/", { method: "POST", body: params });
     if(!res.ok){
       let detail = "";
@@ -326,6 +335,7 @@
     // failing (405). POST is what the docs' own "Set a Key Value" example
     // uses (`curl -d 'world' https://kvdb.io/BUCKET/hello`).
     const res = await fetch(KV+"/"+cfg.space+"/board", {method:"POST", body});
+    if(res.status===403) throw new Error("WRITE_BLOCKED");
     if(!res.ok) throw new Error("write "+res.status);
   }
 
@@ -393,6 +403,12 @@
     }catch(e){
       if(e.message==="TOO_BIG"){
         setStatus("off","canvas is full — clear some items");
+      }else if(e.message==="WRITE_BLOCKED"){
+        // This is NOT a transient network problem — retrying on the same
+        // interval won't fix it. kvdb.io is actively rejecting writes to
+        // this specific bucket ("bucket policy blocked the request").
+        // Surface it distinctly so it doesn't masquerade as "offline".
+        setStatus("off","this space is refusing writes (403) — try Space settings → create a new one");
       }else{
         setStatus("off","offline · retrying (working locally) — "+e.message);
       }
