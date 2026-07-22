@@ -132,6 +132,7 @@
   .panel{
     background:var(--paper);border:2px solid var(--ink);max-width:520px;width:100%;
     box-shadow:8px 8px 0 var(--shadow);
+    max-height:90vh;overflow-y:auto;
   }
   .panel .ph{padding:18px 22px;border-bottom:2px solid var(--ink)}
   .panel .ph h2{font-family:'Instrument Serif',serif;font-weight:400;font-size:28px}
@@ -174,7 +175,7 @@
   <div class="composer">
     <textarea id="input" placeholder="Paste or type anything here — text, links, snippets, a quick note. Then hit Post (or Ctrl/Cmd+Enter). It shows up on your other laptop within a couple seconds."></textarea>
     <div class="bar">
-      <span class="hint">Tip: ⌘/Ctrl + Enter to post · paste images are supported (kept small)</span>
+      <span class="hint">Tip: ⌘/Ctrl + Enter to post · pasted images are shrunk to fit the board's size limit</span>
       <button class="btn" id="postBtn">Post to canvas ↵</button>
     </div>
   </div>
@@ -193,6 +194,8 @@
   <footer>
     Shared scratch space via <a href="https://kvdb.io" target="_blank" rel="noopener">kvdb.io</a> buckets.
     Anyone with this link can read &amp; post here — treat as <b>public</b>.
+    Each space is a single 16&nbsp;KB value on kvdb.io, so the board keeps only as many
+    recent items as fit in that budget — older ones roll off automatically.
   </footer>
 </div>
 
@@ -205,8 +208,12 @@
     </div>
     <div class="pb">
       <div>
+        <label for="emailIn">Email (optional)</label>
+        <input id="emailIn" type="email" placeholder="you@example.com — lets you manage/delete this space later" autocomplete="off">
+        <p class="note" style="margin-top:6px">kvdb.io (the storage host) requires an email on new buckets for recovery purposes. Leave blank and we'll use a throwaway one — you just won't be able to reclaim the bucket later.</p>
+      </div>
+      <div>
         <button class="btn" id="createBtn" style="width:100%">✦ Create New Space</button>
-        <p class="note" style="margin-top:8px">Instantly generates a unique shared space ID. No terminal or setup needed.</p>
       </div>
       <div class="or">or join an existing space</div>
       <div>
@@ -223,8 +230,19 @@
 (function(){
   "use strict";
   const KV = "https://kvdb.io";
-  const POLL_MS = 2600;
-  const MAX_PAYLOAD = 380000;
+  const POLL_MS = 4000; // kvdb.io allows 1000 req/hr per IP; a few devices
+                         // behind the same NAT polling every 2.6s (the old
+                         // value) can burn through that fast and start
+                         // getting 429s. 4s leaves real headroom.
+  // kvdb.io hard-caps every *value* (i.e. our entire board, under the
+  // single "board" key) at 16 KB — see https://kvdb.io/docs/api/
+  // ("Key names ... Values can be of any data type but are limited to
+  // 16 KB in size"). The original constant here (380000) was ~24x too
+  // large, so once the board grew past ~16KB every write would fail.
+  const MAX_PAYLOAD = 15500; // bytes, with headroom for JSON overhead
+  const IMAGE_BUDGET = 9000; // a single pasted image, after downscaling —
+                              // leaves room for other items sharing the
+                              // same 16KB board.
   const LS_CFG = "cc_cfg_v1";
   const LS_CACHE = "cc_cache_v1";
   const CLIENT = "m-" + Math.random().toString(36).slice(2,7);
@@ -237,9 +255,25 @@
   let board = { items: [], tomb: {} };
   let dirty = false, polling = false, lastNet = 0;
 
-  async function createBucket(){
-    const res = await fetch(KV + "/", { method: "POST" });
-    if(!res.ok) throw new Error("Could not create bucket ("+res.status+")");
+  function randomPlaceholderEmail(){
+    const rnd = Math.random().toString(36).slice(2,10);
+    return "space-" + rnd + "@kvdb-canvas.app";
+  }
+
+  async function createBucket(email){
+    // BUG (fixed): kvdb.io requires an `email` field on bucket creation —
+    // "When creating a bucket, ensure that you set a valid email address"
+    // (https://kvdb.io/docs/api/, Buckets > Create a Bucket). The original
+    // code POSTed with no body at all, so every create attempt got a 400
+    // and landed in the generic "network issue" error message.
+    const params = new URLSearchParams();
+    params.set("email", (email && email.trim()) || randomPlaceholderEmail());
+    const res = await fetch(KV + "/", { method: "POST", body: params });
+    if(!res.ok){
+      let detail = "";
+      try{ detail = (await res.text()).trim(); }catch(e){}
+      throw new Error("HTTP " + res.status + (detail ? " — " + detail : ""));
+    }
     const id = (await res.text()).trim();
     if(!id) throw new Error("Empty bucket id from kvdb");
     return id;
@@ -280,15 +314,34 @@
   }
   async function push(data){
     const body = JSON.stringify(data);
-    if(body.length > MAX_PAYLOAD) throw new Error("TOO_BIG");
-    const res = await fetch(KV+"/"+cfg.space+"/board", {method:"PUT", body});
+    if(body.length > MAX_PAYLOAD){
+      // Shouldn't happen — sync() trims before calling push() — but guard
+      // against it anyway rather than letting kvdb reject it opaquely.
+      throw new Error("TOO_BIG");
+    }
+    // BUG (fixed): kvdb.io's key endpoints only support GET, POST, PATCH,
+    // DELETE (PATCH is reserved for atomic counter increments). The
+    // original code used PUT, which isn't a method the API recognizes for
+    // setting a value — every write to the shared board was silently
+    // failing (405). POST is what the docs' own "Set a Key Value" example
+    // uses (`curl -d 'world' https://kvdb.io/BUCKET/hello`).
+    const res = await fetch(KV+"/"+cfg.space+"/board", {method:"POST", body});
     if(!res.ok) throw new Error("write "+res.status);
   }
 
   /* ---------- merge ---------- */
   function merge(a,b){
-    const tomb = Object.assign({}, a.tomb, b.tomb);
-    for(const k in b.tomb){ if(!(k in tomb) || b.tomb[k]>tomb[k]) tomb[k]=b.tomb[k]; }
+    // BUG (fixed): the original loop re-derived `tomb` from Object.assign
+    // (which just takes b's value for any shared key) and then compared
+    // b's value against the *already-overwritten* tomb, so it always kept
+    // b's timestamp even when a's was newer. Fixed to take the max of the
+    // two directly.
+    const tomb = {};
+    const keys = new Set([...Object.keys(a.tomb||{}), ...Object.keys(b.tomb||{})]);
+    for(const k of keys){
+      const av = (a.tomb||{})[k] || 0, bv = (b.tomb||{})[k] || 0;
+      tomb[k] = Math.max(av, bv);
+    }
     const map = new Map();
     for(const it of [...a.items, ...b.items]){
       if(tomb[it.id]) continue;
@@ -301,6 +354,23 @@
     return { items, tomb };
   }
 
+  /* ---------- budget trimming ---------- */
+  // BUG (fixed): nothing previously kept the board under kvdb.io's real
+  // 16KB-per-value limit as it grew — items were only capped by *count*
+  // (200), not by serialized size, so a handful of longer notes (let
+  // alone an image) would push a write past the limit and it would just
+  // fail forever. This drops the oldest surviving items until the whole
+  // board comfortably fits.
+  function trimToBudget(b){
+    let items = b.items.slice();
+    let out = { items, tomb: b.tomb };
+    while(items.length && JSON.stringify(out).length > MAX_PAYLOAD){
+      items.pop(); // items are newest-first — this drops the oldest
+      out = { items, tomb: out.tomb };
+    }
+    return out;
+  }
+
   /* ---------- sync loop ---------- */
   async function sync(){
     if(!cfg || polling) return;
@@ -310,6 +380,7 @@
       const remote = await pull();
       const before = JSON.stringify(board.items.map(i=>i.id));
       board = merge(board, remote);
+      board = trimToBudget(board);
       const after = JSON.stringify(board.items.map(i=>i.id));
       if(dirty){
         await push(board);
@@ -323,7 +394,7 @@
       if(e.message==="TOO_BIG"){
         setStatus("off","canvas is full — clear some items");
       }else{
-        setStatus("off","offline · retrying (working locally)");
+        setStatus("off","offline · retrying (working locally) — "+e.message);
       }
     }finally{
       polling = false;
@@ -347,6 +418,7 @@
                  text: text||"", html: html||"", ts: Date.now(), by: CLIENT };
     board.items.unshift(it);
     board = merge(board, {items:[],tomb:{}});
+    board = trimToBudget(board);
     dirty = true; cacheLocal(); render(); sync();
   }
   function removeItem(id){
@@ -418,22 +490,50 @@
   input.addEventListener("keydown", e=>{
     if((e.metaKey||e.ctrlKey) && e.key==="Enter"){ e.preventDefault(); postFromInput(); }
   });
+
+  // Downscale a pasted image before it ever becomes a data URL headed for
+  // storage. kvdb.io's 16KB cap applies to the *whole board*, shared by
+  // every item, so even a modest photo would blow the budget on its own —
+  // shrink to a small thumbnail and drop JPEG quality until it fits.
+  function downscaleImage(file){
+    return new Promise((resolve, reject)=>{
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = ()=>{
+        URL.revokeObjectURL(url);
+        let w=img.width, h=img.height;
+        const maxDim=220;
+        if(w>=h && w>maxDim){ h=Math.round(h*maxDim/w); w=maxDim; }
+        else if(h>w && h>maxDim){ w=Math.round(w*maxDim/h); h=maxDim; }
+        const canvas=document.createElement("canvas");
+        canvas.width=Math.max(1,w); canvas.height=Math.max(1,h);
+        canvas.getContext("2d").drawImage(img,0,0,canvas.width,canvas.height);
+        let quality=0.55;
+        let dataUrl=canvas.toDataURL("image/jpeg",quality);
+        while(dataUrl.length>IMAGE_BUDGET && quality>0.15){
+          quality-=0.1;
+          dataUrl=canvas.toDataURL("image/jpeg",quality);
+        }
+        resolve(dataUrl);
+      };
+      img.onerror = ()=>{ URL.revokeObjectURL(url); reject(new Error("decode failed")); };
+      img.src = url;
+    });
+  }
   input.addEventListener("paste", e=>{
     const items=e.clipboardData && e.clipboardData.items;
     if(!items) return;
     for(const i of items){
       if(i.type && i.type.indexOf("image")===0){
         const file=i.getAsFile(); if(!file) continue;
-        const r=new FileReader();
-        r.onload=()=>{
-          if((r.result||"").length>MAX_PAYLOAD*0.7){
-            alert("That image is too large for the shared canvas.");
+        e.preventDefault();
+        downscaleImage(file).then(dataUrl=>{
+          if(dataUrl.length>IMAGE_BUDGET){
+            alert("This board is capped at 16KB total (a kvdb.io limit), shared by every item on it — that image still doesn't fit even shrunk down. Try a smaller/simpler image, or clear some items first.");
             return;
           }
-          addItem("[image]", '<img alt="pasted image" src="'+r.result+'">');
-        };
-        r.readAsDataURL(file);
-        e.preventDefault();
+          addItem("[image]", '<img alt="pasted image" src="'+dataUrl+'">');
+        }).catch(()=>{ alert("Couldn't read that image."); });
         return;
       }
     }
@@ -462,12 +562,12 @@
     const b=$("createBtn"), err=$("setupErr");
     b.disabled=true; b.textContent="creating…"; err.textContent="";
     try{
-      const space = await createBucket();
+      const space = await createBucket($("emailIn").value);
       saveCfg({ space });
       closeSetup();
       boot();
     }catch(e){
-      err.textContent="Couldn't create space (network issue). Try again or check your connection.";
+      err.textContent="Couldn't create space: "+e.message;
     }finally{
       b.disabled=false; b.textContent="✦ Create New Space";
     }
