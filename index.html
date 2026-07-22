@@ -237,8 +237,12 @@
   let board = { items: [], tomb: {} };
   let dirty = false, polling = false, lastNet = 0;
 
-  function generateSpaceKey(){
-    return 'sp-' + Math.random().toString(36).substring(2, 10) + Math.random().toString(36).substring(2, 10);
+  async function createBucket(){
+    const res = await fetch(KV + "/", { method: "POST" });
+    if(!res.ok) throw new Error("Could not create bucket ("+res.status+")");
+    const id = (await res.text()).trim();
+    if(!id) throw new Error("Empty bucket id from kvdb");
+    return id;
   }
 
   /* ---------- config ---------- */
@@ -257,7 +261,6 @@
     history.replaceState(null,"",location.pathname+location.search+"#s="+c.space);
     $("spaceLabel").textContent = "space · "+c.space;
   }
-  const key = () => "board_" + encodeURIComponent(cfg.space);
 
   /* ---------- status ---------- */
   function setStatus(state,msg){
@@ -267,7 +270,7 @@
 
   /* ---------- remote ---------- */
   async function pull(){
-    const res = await fetch(KV+"/public_space/"+key(), {cache:"no-store"});
+    const res = await fetch(KV+"/"+cfg.space+"/board", {cache:"no-store"});
     if(res.status===404) return {items:[],tomb:{}};
     if(!res.ok) throw new Error("read "+res.status);
     const txt = await res.text();
@@ -278,7 +281,7 @@
   async function push(data){
     const body = JSON.stringify(data);
     if(body.length > MAX_PAYLOAD) throw new Error("TOO_BIG");
-    const res = await fetch(KV+"/public_space/"+key(), {method:"PUT", body});
+    const res = await fetch(KV+"/"+cfg.space+"/board", {method:"PUT", body});
     if(!res.ok) throw new Error("write "+res.status);
   }
 
@@ -455,11 +458,19 @@
   function closeSetup(){ overlay.style.display="none"; }
   overlay.addEventListener("click", e=>{ if(e.target===overlay && cfg) closeSetup(); });
 
-  $("createBtn").addEventListener("click", ()=>{
-    const space = generateSpaceKey();
-    saveCfg({ space });
-    closeSetup();
-    boot();
+  $("createBtn").addEventListener("click", async ()=>{
+    const b=$("createBtn"), err=$("setupErr");
+    b.disabled=true; b.textContent="creating…"; err.textContent="";
+    try{
+      const space = await createBucket();
+      saveCfg({ space });
+      closeSetup();
+      boot();
+    }catch(e){
+      err.textContent="Couldn't create space (network issue). Try again or check your connection.";
+    }finally{
+      b.disabled=false; b.textContent="✦ Create New Space";
+    }
   });
 
   $("joinBtn").addEventListener("click", ()=>{
